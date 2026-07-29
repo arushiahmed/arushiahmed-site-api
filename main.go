@@ -13,12 +13,20 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
+
+	"github.com/arushiahmed/arushiahmed-site-api/documents"
+	"github.com/arushiahmed/arushiahmed-site-api/photos"
 )
 
 func main() {
-	bucket := os.Getenv("PHOTOS_BUCKET")
-	if bucket == "" {
-		bucket = "arushiahmed-photos"
+	photosBucket := os.Getenv("PHOTOS_BUCKET")
+	if photosBucket == "" {
+		photosBucket = "arushiahmed-photos"
+	}
+
+	documentsBucket := os.Getenv("DOCUMENTS_BUCKET")
+	if documentsBucket == "" {
+		documentsBucket = "arushiahmed-documents"
 	}
 
 	cfg, err := config.LoadDefaultConfig(context.Background())
@@ -26,13 +34,17 @@ func main() {
 		log.Fatalf("load aws config: %v", err)
 	}
 
-	photos := NewPhotoService(s3.NewFromConfig(cfg), bucket)
+	s3Client := s3.NewFromConfig(cfg)
+	photoSvc := photos.NewPhotoService(s3Client, photosBucket)
+	documentSvc := documents.NewDocumentService(s3Client, documentsBucket)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
-	mux.HandleFunc("GET /photos", photos.List)
-	mux.HandleFunc("GET /photos/city/{city}", photos.ByCity)
-	mux.HandleFunc("GET /photos/{key...}", photos.Get)
+	mux.HandleFunc("GET /photos", photoSvc.List)
+	mux.HandleFunc("GET /photos/city/{city}", photoSvc.ByCity)
+	mux.HandleFunc("GET /photos/{key...}", photoSvc.Get)
+	mux.HandleFunc("GET /documents", documentSvc.List)
+	mux.HandleFunc("GET /documents/{key...}", documentSvc.Get)
 
 	handler := withCORS(mux)
 
