@@ -37,9 +37,46 @@ type Photo struct {
 
 // List handles GET /photos?prefix=optional
 func (s *PhotoService) List(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
 	prefix := r.URL.Query().Get("prefix")
 
+	photos, err := s.list(r.Context(), prefix, nil)
+	if err != nil {
+		log.Printf("list objects: %v", err)
+		http.Error(w, "failed to list photos", http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(photos)
+}
+
+// ByCity handles GET /photos/city/{city} and returns every photo whose key
+// contains the city name (case-insensitive), regardless of where in the key
+// it appears.
+func (s *PhotoService) ByCity(w http.ResponseWriter, r *http.Request) {
+	city := r.PathValue("city")
+	if city == "" {
+		http.Error(w, "missing city", http.StatusBadRequest)
+		return
+	}
+	needle := strings.ToLower(city)
+
+	photos, err := s.list(r.Context(), "", func(key string) bool {
+		return strings.Contains(strings.ToLower(key), needle)
+	})
+	if err != nil {
+		log.Printf("list objects: %v", err)
+		http.Error(w, "failed to list photos", http.StatusBadGateway)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(photos)
+}
+
+// list pages through the bucket under prefix, presigning and collecting
+// every object for which filter returns true (or every object, if filter is nil).
+func (s *PhotoService) list(ctx context.Context, prefix string, filter func(key string) bool) ([]Photo, error) {
 	photos := []Photo{}
 	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
 		Bucket: aws.String(s.bucket),
@@ -49,12 +86,13 @@ func (s *PhotoService) List(w http.ResponseWriter, r *http.Request) {
 	for paginator.HasMorePages() {
 		page, err := paginator.NextPage(ctx)
 		if err != nil {
-			log.Printf("list objects: %v", err)
-			http.Error(w, "failed to list photos", http.StatusBadGateway)
-			return
+			return nil, err
 		}
 		for _, obj := range page.Contents {
 			if obj.Key == nil || strings.HasSuffix(*obj.Key, "/") {
+				continue
+			}
+			if filter != nil && !filter(*obj.Key) {
 				continue
 			}
 			url, err := s.presignGet(ctx, *obj.Key)
@@ -71,8 +109,7 @@ func (s *PhotoService) List(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(photos)
+	return photos, nil
 }
 
 // Get handles GET /photos/{key...} and redirects to a presigned S3 URL

@@ -31,6 +31,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("GET /photos", photos.List)
+	mux.HandleFunc("GET /photos/city/{city}", photos.ByCity)
 	mux.HandleFunc("GET /photos/{key...}", photos.Get)
 
 	handler := withCORS(mux)
