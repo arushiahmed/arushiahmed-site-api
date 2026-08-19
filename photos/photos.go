@@ -1,45 +1,31 @@
 package photos
 
 import (
-	"context"
 	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
-	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+
+	"github.com/arushiahmed/arushiahmed-site-api/store"
 )
 
-const presignExpiry = 15 * time.Minute
-
 type PhotoService struct {
-	client  *s3.Client
-	presign *s3.PresignClient
-	bucket  string
+	store *store.Service
 }
 
 func NewPhotoService(client *s3.Client, bucket string) *PhotoService {
-	return &PhotoService{
-		client:  client,
-		presign: s3.NewPresignClient(client),
-		bucket:  bucket,
-	}
+	return &PhotoService{store: store.New(client, bucket)}
 }
 
-type Photo struct {
-	Key          string    `json:"key"`
-	URL          string    `json:"url"`
-	Size         int64     `json:"size"`
-	LastModified time.Time `json:"lastModified"`
-}
+type Photo = store.Item
 
 // List handles GET /photos?prefix=optional
 func (s *PhotoService) List(w http.ResponseWriter, r *http.Request) {
 	prefix := r.URL.Query().Get("prefix")
 
-	photos, err := s.list(r.Context(), prefix, nil)
+	photos, err := s.store.List(r.Context(), prefix, nil)
 	if err != nil {
 		log.Printf("list objects: %v", err)
 		http.Error(w, "failed to list photos", http.StatusBadGateway)
@@ -61,7 +47,7 @@ func (s *PhotoService) ByCity(w http.ResponseWriter, r *http.Request) {
 	}
 	needle := strings.ToLower(city)
 
-	photos, err := s.list(r.Context(), "", func(key string) bool {
+	photos, err := s.store.List(r.Context(), "", func(key string) bool {
 		return strings.Contains(strings.ToLower(key), needle)
 	})
 	if err != nil {
@@ -74,44 +60,6 @@ func (s *PhotoService) ByCity(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(photos)
 }
 
-// list pages through the bucket under prefix, presigning and collecting
-// every object for which filter returns true (or every object, if filter is nil).
-func (s *PhotoService) list(ctx context.Context, prefix string, filter func(key string) bool) ([]Photo, error) {
-	photos := []Photo{}
-	paginator := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
-		Bucket: aws.String(s.bucket),
-		Prefix: aws.String(prefix),
-	})
-
-	for paginator.HasMorePages() {
-		page, err := paginator.NextPage(ctx)
-		if err != nil {
-			return nil, err
-		}
-		for _, obj := range page.Contents {
-			if obj.Key == nil || strings.HasSuffix(*obj.Key, "/") {
-				continue
-			}
-			if filter != nil && !filter(*obj.Key) {
-				continue
-			}
-			url, err := s.presignGet(ctx, *obj.Key)
-			if err != nil {
-				log.Printf("presign %s: %v", *obj.Key, err)
-				continue
-			}
-			photos = append(photos, Photo{
-				Key:          *obj.Key,
-				URL:          url,
-				Size:         aws.ToInt64(obj.Size),
-				LastModified: aws.ToTime(obj.LastModified),
-			})
-		}
-	}
-
-	return photos, nil
-}
-
 // Get handles GET /photos/{key...} and redirects to a presigned S3 URL
 func (s *PhotoService) Get(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
@@ -120,7 +68,7 @@ func (s *PhotoService) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	url, err := s.presignGet(r.Context(), key)
+	url, err := s.store.PresignGet(r.Context(), key)
 	if err != nil {
 		log.Printf("presign %s: %v", key, err)
 		http.Error(w, "photo not found", http.StatusNotFound)
@@ -128,15 +76,4 @@ func (s *PhotoService) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Redirect(w, r, url, http.StatusFound)
-}
-
-func (s *PhotoService) presignGet(ctx context.Context, key string) (string, error) {
-	req, err := s.presign.PresignGetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(key),
-	}, s3.WithPresignExpires(presignExpiry))
-	if err != nil {
-		return "", err
-	}
-	return req.URL, nil
 }
