@@ -15,8 +15,8 @@ type PhotoService struct {
 	store *store.Service
 }
 
-func NewPhotoService(client *s3.Client, bucket string) *PhotoService {
-	return &PhotoService{store: store.New(client, bucket)}
+func NewPhotoService(client *s3.Client, bucket, cdnDomain string) *PhotoService {
+	return &PhotoService{store: store.New(client, bucket, cdnDomain)}
 }
 
 type Photo = store.Item
@@ -60,7 +60,7 @@ func (s *PhotoService) ByCity(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(photos)
 }
 
-// Get handles GET /photos/{key...} and redirects to a presigned S3 URL
+// Get handles GET /photos/{key...} and redirects to the photo's CDN URL
 func (s *PhotoService) Get(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if key == "" {
@@ -68,12 +68,5 @@ func (s *PhotoService) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	url, err := s.store.PresignGet(r.Context(), key)
-	if err != nil {
-		log.Printf("presign %s: %v", key, err)
-		http.Error(w, "photo not found", http.StatusNotFound)
-		return
-	}
-
-	http.Redirect(w, r, url, http.StatusFound)
+	http.Redirect(w, r, s.store.PublicURL(key), http.StatusFound)
 }

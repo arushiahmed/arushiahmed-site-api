@@ -1,37 +1,27 @@
-// Package store provides shared S3-backed listing and presigning logic used
-// by the photos and documents services.
+// Package store provides shared S3-backed listing logic, and builds CDN
+// URLs for objects, used by the photos and documents services.
 package store
 
 import (
 	"context"
-	"log"
 	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	v4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
-const PresignExpiry = 15 * time.Minute
-
-// presignAPI is satisfied by *s3.PresignClient; narrowed to the one method
-// Service needs so tests can substitute a fake.
-type presignAPI interface {
-	PresignGetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.PresignOptions)) (*v4.PresignedHTTPRequest, error)
-}
-
 type Service struct {
-	list    s3.ListObjectsV2APIClient
-	presign presignAPI
-	bucket  string
+	list      s3.ListObjectsV2APIClient
+	bucket    string
+	cdnDomain string
 }
 
-func New(client *s3.Client, bucket string) *Service {
+func New(client *s3.Client, bucket, cdnDomain string) *Service {
 	return &Service{
-		list:    client,
-		presign: s3.NewPresignClient(client),
-		bucket:  bucket,
+		list:      client,
+		bucket:    bucket,
+		cdnDomain: cdnDomain,
 	}
 }
 
@@ -42,8 +32,8 @@ type Item struct {
 	LastModified time.Time `json:"lastModified"`
 }
 
-// List pages through the bucket under prefix, presigning and collecting
-// every object for which filter returns true (or every object, if filter is nil).
+// List pages through the bucket under prefix, collecting every object for
+// which filter returns true (or every object, if filter is nil).
 func (s *Service) List(ctx context.Context, prefix string, filter func(key string) bool) ([]Item, error) {
 	items := []Item{}
 	paginator := s3.NewListObjectsV2Paginator(s.list, &s3.ListObjectsV2Input{
@@ -63,14 +53,9 @@ func (s *Service) List(ctx context.Context, prefix string, filter func(key strin
 			if filter != nil && !filter(*obj.Key) {
 				continue
 			}
-			url, err := s.PresignGet(ctx, *obj.Key)
-			if err != nil {
-				log.Printf("presign %s: %v", *obj.Key, err)
-				continue
-			}
 			items = append(items, Item{
 				Key:          *obj.Key,
-				URL:          url,
+				URL:          s.PublicURL(*obj.Key),
 				Size:         aws.ToInt64(obj.Size),
 				LastModified: aws.ToTime(obj.LastModified),
 			})
@@ -80,14 +65,7 @@ func (s *Service) List(ctx context.Context, prefix string, filter func(key strin
 	return items, nil
 }
 
-// PresignGet returns a presigned GET URL for key, valid for PresignExpiry.
-func (s *Service) PresignGet(ctx context.Context, key string) (string, error) {
-	req, err := s.presign.PresignGetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(key),
-	}, s3.WithPresignExpires(PresignExpiry))
-	if err != nil {
-		return "", err
-	}
-	return req.URL, nil
+// PublicURL returns the CDN URL through which key is served.
+func (s *Service) PublicURL(key string) string {
+	return "https://" + s.cdnDomain + "/" + key
 }

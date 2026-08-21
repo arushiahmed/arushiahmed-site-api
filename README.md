@@ -1,8 +1,10 @@
 # arushiahmed-site-api
 
 Backend API for my personal website. It serves photo and document metadata backed
-by two S3 buckets, returning presigned URLs rather than serving files
-directly or making the buckets public.
+by two S3 buckets, returning CloudFront CDN URLs rather than serving files
+directly. The buckets stay private (no public access); a CloudFront
+distribution in front of each one, using Origin Access Control, is what's
+allowed to read from them.
 
 The same binary runs two ways:
 
@@ -13,7 +15,7 @@ The same binary runs two ways:
 ## Project layout
 
 - `main.go` — sets up routing, CORS, and the Lambda/local dispatch.
-- `store/` — shared S3 listing + presigning logic used by both services.
+- `store/` — shared S3 listing + CDN URL logic used by both services.
 - `photos/` — photo endpoints (`PhotoService`), backed by the photos bucket.
 - `documents/` — document endpoints (`DocumentService`), backed by the
   documents bucket.
@@ -25,11 +27,13 @@ The same binary runs two ways:
 | GET    | `/health`               | Liveness check, returns `{"status":"ok"}`             |
 | GET    | `/photos`                | List all photos (optional `?prefix=`)                 |
 | GET    | `/photos/city/{city}`    | List photos whose key contains `city` (case-insensitive) |
-| GET    | `/photos/{key...}`       | Redirect (302) to a presigned URL for that photo       |
+| GET    | `/photos/{key...}`       | Redirect (302) to the CDN URL for that photo           |
 | GET    | `/documents`              | List all documents (optional `?prefix=`)               |
-| GET    | `/documents/{key...}`     | Redirect (302) to a presigned URL for that document     |
+| GET    | `/documents/{key...}`     | Redirect (302) to the CDN URL for that document         |
 
-All presigned URLs are valid for 15 minutes.
+CDN URLs are unsigned and stable — no expiry — so they're cacheable at the
+edge. Keys aren't guessable/enumerable outside of these list endpoints, but
+anyone who has a URL can access it indefinitely.
 
 ## Prerequisites
 
@@ -48,16 +52,18 @@ go run .
 
 This starts the server on `http://localhost:8080`. Useful env vars:
 
-| Variable           | Default                  | Purpose                                  |
-|--------------------|---------------------------|-------------------------------------------|
-| `PHOTOS_BUCKET`     | `arushiahmed-photos`      | S3 bucket for photos                      |
-| `DOCUMENTS_BUCKET`  | `arushiahmed-documents`   | S3 bucket for documents                   |
-| `ALLOWED_ORIGIN`    | `http://localhost:3000`   | Value sent in `Access-Control-Allow-Origin` |
+| Variable              | Default                  | Purpose                                        |
+|-----------------------|---------------------------|-------------------------------------------------|
+| `PHOTOS_BUCKET`        | `arushiahmed-photos`      | S3 bucket for photos                            |
+| `DOCUMENTS_BUCKET`     | `arushiahmed-documents`   | S3 bucket for documents                         |
+| `PHOTOS_CDN_DOMAIN`    | *(none — required)*       | CloudFront domain fronting the photos bucket     |
+| `DOCUMENTS_CDN_DOMAIN` | *(none — required)*       | CloudFront domain fronting the documents bucket  |
+| `ALLOWED_ORIGIN`       | `http://localhost:3000`   | Value sent in `Access-Control-Allow-Origin`     |
 
 Example:
 
 ```bash
-PHOTOS_BUCKET=my-test-bucket ALLOWED_ORIGIN=http://localhost:3000 go run .
+PHOTOS_BUCKET=my-test-bucket PHOTOS_CDN_DOMAIN=d123abc.cloudfront.net ALLOWED_ORIGIN=http://localhost:3000 go run .
 ```
 
 Then exercise it with curl:
@@ -66,7 +72,7 @@ Then exercise it with curl:
 curl http://localhost:8080/health
 curl http://localhost:8080/photos
 curl http://localhost:8080/photos/city/paris
-curl -i http://localhost:8080/photos/some/key.jpg   # expect a 302 redirect
+curl -i http://localhost:8080/photos/some/key.jpg   # expect a 302 redirect to the CDN URL
 curl http://localhost:8080/documents
 ```
 
@@ -81,7 +87,7 @@ at all.
 go test ./...
 ```
 
-`store`'s tests mock the S3 client/presigner, so they run fully offline with
+`store`'s tests mock the S3 listing client, so they run fully offline with
 no AWS credentials required.
 
 ## Building

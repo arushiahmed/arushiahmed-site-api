@@ -14,8 +14,8 @@ type DocumentService struct {
 	store *store.Service
 }
 
-func NewDocumentService(client *s3.Client, bucket string) *DocumentService {
-	return &DocumentService{store: store.New(client, bucket)}
+func NewDocumentService(client *s3.Client, bucket, cdnDomain string) *DocumentService {
+	return &DocumentService{store: store.New(client, bucket, cdnDomain)}
 }
 
 type Document = store.Item
@@ -35,7 +35,7 @@ func (s *DocumentService) List(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(documents)
 }
 
-// Get handles GET /documents/{key...} and redirects to a presigned S3 URL
+// Get handles GET /documents/{key...} and redirects to the document's CDN URL
 func (s *DocumentService) Get(w http.ResponseWriter, r *http.Request) {
 	key := r.PathValue("key")
 	if key == "" {
@@ -43,12 +43,5 @@ func (s *DocumentService) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	url, err := s.store.PresignGet(r.Context(), key)
-	if err != nil {
-		log.Printf("presign %s: %v", key, err)
-		http.Error(w, "document not found", http.StatusNotFound)
-		return
-	}
-
-	http.Redirect(w, r, url, http.StatusFound)
+	http.Redirect(w, r, s.store.PublicURL(key), http.StatusFound)
 }

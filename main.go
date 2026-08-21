@@ -29,14 +29,17 @@ func main() {
 		documentsBucket = "arushiahmed-documents"
 	}
 
+	photosCDNDomain := os.Getenv("PHOTOS_CDN_DOMAIN")
+	documentsCDNDomain := os.Getenv("DOCUMENTS_CDN_DOMAIN")
+
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
 		log.Fatalf("load aws config: %v", err)
 	}
 
 	s3Client := s3.NewFromConfig(cfg)
-	photoSvc := photos.NewPhotoService(s3Client, photosBucket)
-	documentSvc := documents.NewDocumentService(s3Client, documentsBucket)
+	photoSvc := photos.NewPhotoService(s3Client, photosBucket, photosCDNDomain)
+	documentSvc := documents.NewDocumentService(s3Client, documentsBucket, documentsCDNDomain)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
