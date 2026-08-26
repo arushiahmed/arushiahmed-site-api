@@ -16,6 +16,7 @@ import (
 
 	"github.com/arushiahmed/arushiahmed-site-api/documents"
 	"github.com/arushiahmed/arushiahmed-site-api/photos"
+	"github.com/arushiahmed/arushiahmed-site-api/uxdesigns"
 )
 
 func main() {
@@ -29,8 +30,14 @@ func main() {
 		documentsBucket = "arushiahmed-documents"
 	}
 
+	uxDesignsBucket := os.Getenv("UXDESIGNS_BUCKET")
+	if uxDesignsBucket == "" {
+		uxDesignsBucket = "arushiahmed-uxdesigns"
+	}
+
 	photosCDNDomain := os.Getenv("PHOTOS_CDN_DOMAIN")
 	documentsCDNDomain := os.Getenv("DOCUMENTS_CDN_DOMAIN")
+	uxDesignsCDNDomain := os.Getenv("UXDESIGNS_CDN_DOMAIN")
 
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
@@ -40,6 +47,7 @@ func main() {
 	s3Client := s3.NewFromConfig(cfg)
 	photoSvc := photos.NewPhotoService(s3Client, photosBucket, photosCDNDomain)
 	documentSvc := documents.NewDocumentService(s3Client, documentsBucket, documentsCDNDomain)
+	uxDesignSvc := uxdesigns.NewUXDesignService(s3Client, uxDesignsBucket, uxDesignsCDNDomain)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
@@ -48,6 +56,8 @@ func main() {
 	mux.HandleFunc("GET /photos/{key...}", photoSvc.Get)
 	mux.HandleFunc("GET /documents", documentSvc.List)
 	mux.HandleFunc("GET /documents/{key...}", documentSvc.Get)
+	mux.HandleFunc("GET /uxdesigns", uxDesignSvc.List)
+	mux.HandleFunc("GET /uxdesigns/{key...}", uxDesignSvc.Get)
 
 	handler := withCORS(mux)
 
