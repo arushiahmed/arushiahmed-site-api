@@ -3,12 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 
-	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -62,18 +60,11 @@ func main() {
 	handler := withCORS(mux)
 
 	if os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" {
-		// ALB path-pattern rules don't rewrite the path, so /api/* still
-		// arrives with the /api prefix intact — strip it here so mux
+		// CloudFront's /api/* path pattern doesn't rewrite the path, so it
+		// still arrives with the /api prefix intact — strip it here so mux
 		// route patterns stay identical between local dev and Lambda.
-		adapter := httpadapter.NewALB(http.StripPrefix("/api", handler))
-		lambda.Start(func(ctx context.Context, event events.ALBTargetGroupRequest) (events.ALBTargetGroupResponse, error) {
-			resp, err := adapter.ProxyWithContext(ctx, event)
-			// The adapter sets StatusDescription to just "OK" via
-			// http.StatusText, but the ALB requires the "200 OK" format
-			// (status code prefix) and returns 502 without it.
-			resp.StatusDescription = fmt.Sprintf("%d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
-			return resp, err
-		})
+		adapter := httpadapter.NewV2(http.StripPrefix("/api", handler))
+		lambda.Start(adapter.ProxyWithContext)
 		return
 	}
 
