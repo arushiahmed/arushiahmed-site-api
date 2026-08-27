@@ -1,24 +1,28 @@
 # arushiahmed-site-api
 
-Backend API for my personal website. It serves photo and document metadata backed
-by two S3 buckets, returning CloudFront CDN URLs rather than serving files
-directly. The buckets stay private (no public access); a CloudFront
-distribution in front of each one, using Origin Access Control, is what's
-allowed to read from them.
+Backend API for my personal website. It serves photo, document, and UX design
+metadata backed by three S3 buckets, returning CloudFront CDN URLs rather than
+serving files directly. The buckets stay private (no public access); a
+CloudFront distribution in front of each one, using Origin Access Control, is
+what's allowed to read from them.
 
 The same binary runs two ways:
 
 - **Locally / anywhere else**: a plain `net/http` server on `:8080`.
 - **In AWS Lambda**: detected via the `AWS_LAMBDA_FUNCTION_NAME` env var,
-  using `httpadapter` to run the exact same handlers behind an ALB.
+  using `httpadapter`'s `NewV2` adapter to run the exact same handlers behind
+  a Lambda Function URL (no load balancer involved). The site's main
+  CloudFront distribution proxies `/api/*` straight to that Function URL.
 
 ## Project layout
 
 - `main.go` — sets up routing, CORS, and the Lambda/local dispatch.
-- `store/` — shared S3 listing + CDN URL logic used by both services.
+- `store/` — shared S3 listing + CDN URL logic used by all three services.
 - `photos/` — photo endpoints (`PhotoService`), backed by the photos bucket.
 - `documents/` — document endpoints (`DocumentService`), backed by the
   documents bucket.
+- `uxdesigns/` — UX design endpoints (`UXDesignService`), backed by the
+  uxdesigns bucket.
 
 ## Endpoints
 
@@ -30,6 +34,8 @@ The same binary runs two ways:
 | GET    | `/photos/{key...}`       | Redirect (302) to the CDN URL for that photo           |
 | GET    | `/documents`              | List all documents (optional `?prefix=`)               |
 | GET    | `/documents/{key...}`     | Redirect (302) to the CDN URL for that document         |
+| GET    | `/uxdesigns`              | List all UX designs (optional `?prefix=`)              |
+| GET    | `/uxdesigns/{key...}`     | Redirect (302) to the CDN URL for that design           |
 
 CDN URLs are unsigned and stable — no expiry — so they're cacheable at the
 edge. Keys aren't guessable/enumerable outside of these list endpoints, but
@@ -52,13 +58,15 @@ go run .
 
 This starts the server on `http://localhost:8080`. Useful env vars:
 
-| Variable              | Default                  | Purpose                                        |
-|-----------------------|---------------------------|-------------------------------------------------|
-| `PHOTOS_BUCKET`        | `arushiahmed-photos`      | S3 bucket for photos                            |
-| `DOCUMENTS_BUCKET`     | `arushiahmed-documents`   | S3 bucket for documents                         |
+| Variable               | Default                  | Purpose                                          |
+|------------------------|---------------------------|---------------------------------------------------|
+| `PHOTOS_BUCKET`        | `arushiahmed-photos`      | S3 bucket for photos                             |
+| `DOCUMENTS_BUCKET`     | `arushiahmed-documents`   | S3 bucket for documents                          |
+| `UXDESIGNS_BUCKET`     | `arushiahmed-uxdesigns`   | S3 bucket for UX designs                         |
 | `PHOTOS_CDN_DOMAIN`    | *(none — required)*       | CloudFront domain fronting the photos bucket     |
 | `DOCUMENTS_CDN_DOMAIN` | *(none — required)*       | CloudFront domain fronting the documents bucket  |
-| `ALLOWED_ORIGIN`       | `http://localhost:3000`   | Value sent in `Access-Control-Allow-Origin`     |
+| `UXDESIGNS_CDN_DOMAIN` | *(none — required)*       | CloudFront domain fronting the uxdesigns bucket  |
+| `ALLOWED_ORIGIN`       | `http://localhost:3000`   | Value sent in `Access-Control-Allow-Origin`      |
 
 Example:
 
@@ -74,12 +82,13 @@ curl http://localhost:8080/photos
 curl http://localhost:8080/photos/city/paris
 curl -i http://localhost:8080/photos/some/key.jpg   # expect a 302 redirect to the CDN URL
 curl http://localhost:8080/documents
+curl http://localhost:8080/uxdesigns
 ```
 
-Note: `/photos`, `/documents`, and their sub-routes require valid AWS
-credentials with access to the target buckets — without them you'll get a
-`502` with a `failed to list ...` body. `/health` works with no AWS access
-at all.
+Note: `/photos`, `/documents`, `/uxdesigns`, and their sub-routes require
+valid AWS credentials with access to the target buckets — without them
+you'll get a `502` with a `failed to list ...` body. `/health` works with no
+AWS access at all.
 
 ## Running the tests
 
