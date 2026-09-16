@@ -12,6 +12,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
 
+	"github.com/arushiahmed/arushiahmed-site-api/auth"
 	"github.com/arushiahmed/arushiahmed-site-api/documents"
 	"github.com/arushiahmed/arushiahmed-site-api/photos"
 	"github.com/arushiahmed/arushiahmed-site-api/uxdesigns"
@@ -37,6 +38,15 @@ func main() {
 	documentsCDNDomain := os.Getenv("DOCUMENTS_CDN_DOMAIN")
 	uxDesignsCDNDomain := os.Getenv("UXDESIGNS_CDN_DOMAIN")
 
+	uxDesignsPasswordHash := os.Getenv("UXDESIGNS_PASSWORD_HASH")
+	if uxDesignsPasswordHash == "" {
+		log.Fatal("UXDESIGNS_PASSWORD_HASH must be set (generate one with cmd/hashpassword)")
+	}
+	uxDesignsTokenSecret := os.Getenv("UXDESIGNS_TOKEN_SECRET")
+	if uxDesignsTokenSecret == "" {
+		log.Fatal("UXDESIGNS_TOKEN_SECRET must be set to a long random string")
+	}
+
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
 		log.Fatalf("load aws config: %v", err)
@@ -45,7 +55,7 @@ func main() {
 	s3Client := s3.NewFromConfig(cfg)
 	photoSvc := photos.NewPhotoService(s3Client, photosBucket, photosCDNDomain)
 	documentSvc := documents.NewDocumentService(s3Client, documentsBucket, documentsCDNDomain)
-	uxDesignSvc := uxdesigns.NewUXDesignService(s3Client, uxDesignsBucket, uxDesignsCDNDomain)
+	uxDesignSvc := uxdesigns.NewUXDesignService(s3Client, uxDesignsBucket, uxDesignsCDNDomain, uxDesignsPasswordHash, []byte(uxDesignsTokenSecret))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
@@ -54,8 +64,10 @@ func main() {
 	mux.HandleFunc("GET /photos/{key...}", photoSvc.Get)
 	mux.HandleFunc("GET /documents", documentSvc.List)
 	mux.HandleFunc("GET /documents/{key...}", documentSvc.Get)
-	mux.HandleFunc("GET /uxdesigns", uxDesignSvc.List)
-	mux.HandleFunc("GET /uxdesigns/{key...}", uxDesignSvc.Get)
+	mux.HandleFunc("POST /uxdesigns/auth", uxDesignSvc.Auth)
+	mux.HandleFunc("GET /uxdesigns", auth.Require(uxDesignSvc.TokenSecret(), uxDesignSvc.List))
+	mux.HandleFunc("GET /uxdesigns/case-studies/{slug}", auth.Require(uxDesignSvc.TokenSecret(), uxDesignSvc.CaseStudy))
+	mux.HandleFunc("GET /uxdesigns/{key...}", auth.Require(uxDesignSvc.TokenSecret(), uxDesignSvc.Get))
 
 	handler := withCORS(mux)
 
@@ -86,7 +98,8 @@ func withCORS(next http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

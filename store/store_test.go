@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -73,6 +74,38 @@ func TestList_PropagatesListError(t *testing.T) {
 
 	if _, err := svc.List(context.Background(), "", nil); err == nil {
 		t.Fatal("expected error from List when the underlying S3 call fails")
+	}
+}
+
+type fakeGetter struct {
+	body string
+	err  error
+}
+
+func (f *fakeGetter) GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &s3.GetObjectOutput{Body: io.NopCloser(strings.NewReader(f.body))}, nil
+}
+
+func TestGetObject(t *testing.T) {
+	svc := &Service{get: &fakeGetter{body: `{"title":"test"}`}, bucket: "test-bucket"}
+
+	body, err := svc.GetObject(context.Background(), "some/key.json")
+	if err != nil {
+		t.Fatalf("GetObject returned error: %v", err)
+	}
+	if string(body) != `{"title":"test"}` {
+		t.Errorf("unexpected body: %q", body)
+	}
+}
+
+func TestGetObject_PropagatesError(t *testing.T) {
+	svc := &Service{get: &fakeGetter{err: errors.New("boom")}, bucket: "test-bucket"}
+
+	if _, err := svc.GetObject(context.Background(), "missing.json"); err == nil {
+		t.Fatal("expected error from GetObject when the underlying S3 call fails")
 	}
 }
 

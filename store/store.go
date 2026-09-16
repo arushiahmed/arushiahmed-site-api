@@ -4,6 +4,7 @@ package store
 
 import (
 	"context"
+	"io"
 	"strings"
 	"time"
 
@@ -11,8 +12,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
+type getObjectAPIClient interface {
+	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+}
+
 type Service struct {
 	list      s3.ListObjectsV2APIClient
+	get       getObjectAPIClient
 	bucket    string
 	cdnDomain string
 }
@@ -20,6 +26,7 @@ type Service struct {
 func New(client *s3.Client, bucket, cdnDomain string) *Service {
 	return &Service{
 		list:      client,
+		get:       client,
 		bucket:    bucket,
 		cdnDomain: cdnDomain,
 	}
@@ -68,4 +75,17 @@ func (s *Service) List(ctx context.Context, prefix string, filter func(key strin
 // PublicURL returns the CDN URL through which key is served.
 func (s *Service) PublicURL(key string) string {
 	return "https://" + s.cdnDomain + "/" + key
+}
+
+// GetObject fetches and returns the raw contents of key from the bucket.
+func (s *Service) GetObject(ctx context.Context, key string) ([]byte, error) {
+	out, err := s.get.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, err
+	}
+	defer out.Body.Close()
+	return io.ReadAll(out.Body)
 }

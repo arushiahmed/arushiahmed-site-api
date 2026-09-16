@@ -22,24 +22,42 @@ The same binary runs two ways:
 - `documents/` — document endpoints (`DocumentService`), backed by the
   documents bucket.
 - `uxdesigns/` — UX design endpoints (`UXDesignService`), backed by the
-  uxdesigns bucket.
+  uxdesigns bucket. Unlike photos/documents, these are password-protected.
+- `auth/` — password hashing (bcrypt) and stateless bearer tokens (HMAC,
+  self-expiring) used to gate the uxdesigns endpoints. No session store or
+  database — a token is just a signed, time-limited claim.
+- `cmd/hashpassword/` — a CLI to generate a bcrypt hash from a password, for
+  setting `UXDESIGNS_PASSWORD_HASH`. Run `go run ./cmd/hashpassword`, type
+  the password at the prompt (hidden input), and it prints the hash to save
+  — the plaintext password itself is never stored or logged anywhere.
 
 ## Endpoints
 
-| Method | Path                    | Description                                          |
-|--------|-------------------------|-------------------------------------------------------|
-| GET    | `/health`               | Liveness check, returns `{"status":"ok"}`             |
-| GET    | `/photos`                | List all photos (optional `?prefix=`)                 |
-| GET    | `/photos/city/{city}`    | List photos whose key contains `city` (case-insensitive) |
-| GET    | `/photos/{key...}`       | Redirect (302) to the CDN URL for that photo           |
-| GET    | `/documents`              | List all documents (optional `?prefix=`)               |
-| GET    | `/documents/{key...}`     | Redirect (302) to the CDN URL for that document         |
-| GET    | `/uxdesigns`              | List all UX designs (optional `?prefix=`)              |
-| GET    | `/uxdesigns/{key...}`     | Redirect (302) to the CDN URL for that design           |
+| Method | Path                              | Auth | Description                                          |
+|--------|------------------------------------|------|-------------------------------------------------------|
+| GET    | `/health`                          | —    | Liveness check, returns `{"status":"ok"}`             |
+| GET    | `/photos`                          | —    | List all photos (optional `?prefix=`)                 |
+| GET    | `/photos/city/{city}`              | —    | List photos whose key contains `city` (case-insensitive) |
+| GET    | `/photos/{key...}`                 | —    | Redirect (302) to the CDN URL for that photo           |
+| GET    | `/documents`                       | —    | List all documents (optional `?prefix=`)               |
+| GET    | `/documents/{key...}`              | —    | Redirect (302) to the CDN URL for that document         |
+| POST   | `/uxdesigns/auth`                  | —    | Body `{"password":"..."}`; returns `{"token":"..."}` on success (401 otherwise). Token is valid for 24h. |
+| GET    | `/uxdesigns`                       | Bearer token | List all UX design assets (optional `?prefix=`)  |
+| GET    | `/uxdesigns/case-studies/{slug}`   | Bearer token | Returns the raw contents of `{slug}/case-study.json` from the bucket |
+| GET    | `/uxdesigns/{key...}`              | Bearer token | Redirect (302) to the CDN URL for that asset      |
 
 CDN URLs are unsigned and stable — no expiry — so they're cacheable at the
 edge. Keys aren't guessable/enumerable outside of these list endpoints, but
-anyone who has a URL can access it indefinitely.
+anyone who has a URL can access it indefinitely; for `/uxdesigns` that means
+the *password* gates discovering a URL in the first place, but a URL someone
+already has keeps working even after their token expires.
+
+### uxdesigns auth env vars
+
+| Variable                  | Purpose                                                        |
+|----------------------------|-----------------------------------------------------------------|
+| `UXDESIGNS_PASSWORD_HASH` | Bcrypt hash of the shared password, from `cmd/hashpassword`. Required — the Lambda refuses to start without it. |
+| `UXDESIGNS_TOKEN_SECRET`  | Long random string used to sign session tokens (not a password — doesn't need to be memorable). Required. |
 
 ## Prerequisites
 
