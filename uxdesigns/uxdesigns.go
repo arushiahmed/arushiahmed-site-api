@@ -16,7 +16,7 @@ import (
 )
 
 // tokenTTL is how long a session issued by Auth stays valid.
-const tokenTTL = 24 * time.Hour
+const tokenTTL = 15 * time.Minute
 
 type UXDesignService struct {
 	store        *store.Service
