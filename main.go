@@ -33,6 +33,14 @@ func main() {
 	if uxDesignsBucket == "" {
 		uxDesignsBucket = "arushiahmed-uxdesigns"
 	}
+	// The uxdesigns bucket lives in a different region than the Lambda and
+	// the other buckets; S3 GetObject (unlike ListObjectsV2) hard-fails with
+	// a PermanentRedirect if the client's region doesn't match the bucket's,
+	// so it needs its own correctly-configured client.
+	uxDesignsBucketRegion := os.Getenv("UXDESIGNS_BUCKET_REGION")
+	if uxDesignsBucketRegion == "" {
+		uxDesignsBucketRegion = "us-east-1"
+	}
 
 	photosCDNDomain := os.Getenv("PHOTOS_CDN_DOMAIN")
 	documentsCDNDomain := os.Getenv("DOCUMENTS_CDN_DOMAIN")
@@ -51,11 +59,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("load aws config: %v", err)
 	}
+	uxDesignsCfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(uxDesignsBucketRegion))
+	if err != nil {
+		log.Fatalf("load aws config for uxdesigns: %v", err)
+	}
 
 	s3Client := s3.NewFromConfig(cfg)
 	photoSvc := photos.NewPhotoService(s3Client, photosBucket, photosCDNDomain)
 	documentSvc := documents.NewDocumentService(s3Client, documentsBucket, documentsCDNDomain)
-	uxDesignSvc := uxdesigns.NewUXDesignService(s3Client, uxDesignsBucket, uxDesignsCDNDomain, uxDesignsPasswordHash, []byte(uxDesignsTokenSecret))
+	uxDesignSvc := uxdesigns.NewUXDesignService(s3.NewFromConfig(uxDesignsCfg), uxDesignsBucket, uxDesignsCDNDomain, uxDesignsPasswordHash, []byte(uxDesignsTokenSecret))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
