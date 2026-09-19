@@ -13,8 +13,10 @@ import (
 	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
 
 	"github.com/arushiahmed/arushiahmed-site-api/auth"
+	"github.com/arushiahmed/arushiahmed-site-api/chat"
 	"github.com/arushiahmed/arushiahmed-site-api/documents"
 	"github.com/arushiahmed/arushiahmed-site-api/photos"
+	"github.com/arushiahmed/arushiahmed-site-api/store"
 	"github.com/arushiahmed/arushiahmed-site-api/uxdesigns"
 )
 
@@ -55,6 +57,15 @@ func main() {
 		log.Fatal("UXDESIGNS_TOKEN_SECRET must be set to a long random string")
 	}
 
+	bedrockRegion := os.Getenv("BEDROCK_REGION")
+	if bedrockRegion == "" {
+		bedrockRegion = "us-east-2"
+	}
+	chatPromptKey := os.Getenv("CHAT_PROMPT_KEY")
+	if chatPromptKey == "" {
+		log.Fatal("CHAT_PROMPT_KEY must be set (S3 key, in the documents bucket, of the chatbot's system prompt text file)")
+	}
+
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
 		log.Fatalf("load aws config: %v", err)
@@ -69,6 +80,16 @@ func main() {
 	documentSvc := documents.NewDocumentService(s3Client, documentsBucket, documentsCDNDomain)
 	uxDesignSvc := uxdesigns.NewUXDesignService(s3.NewFromConfig(uxDesignsCfg), uxDesignsBucket, uxDesignsCDNDomain, uxDesignsPasswordHash, []byte(uxDesignsTokenSecret))
 
+	chatPromptStore := store.New(s3Client, documentsBucket, "")
+	chatSystemPrompt, err := chatPromptStore.GetObject(context.Background(), chatPromptKey)
+	if err != nil {
+		log.Fatalf("load chat system prompt from s3://%s/%s: %v", documentsBucket, chatPromptKey, err)
+	}
+	chatSvc, err := chat.NewChatService(context.Background(), bedrockRegion, string(chatSystemPrompt))
+	if err != nil {
+		log.Fatalf("create chat service: %v", err)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)
 	mux.HandleFunc("GET /photos", photoSvc.List)
@@ -80,6 +101,7 @@ func main() {
 	mux.HandleFunc("GET /uxdesigns", auth.Require(uxDesignSvc.TokenSecret(), uxDesignSvc.List))
 	mux.HandleFunc("GET /uxdesigns/case-studies/{slug}", auth.Require(uxDesignSvc.TokenSecret(), uxDesignSvc.CaseStudy))
 	mux.HandleFunc("GET /uxdesigns/{key...}", auth.Require(uxDesignSvc.TokenSecret(), uxDesignSvc.Get))
+	mux.HandleFunc("POST /chat", chatSvc.Chat)
 
 	handler := withCORS(mux)
 
