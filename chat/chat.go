@@ -15,8 +15,11 @@ import (
 // the token cost (and therefore price) of any single request.
 const maxHistoryMessages = 20
 
-// modelID is Claude Haiku 4.5's Bedrock model ID.
-const modelID = "anthropic.claude-haiku-4-5"
+// modelID is Claude Haiku 4.5's Bedrock cross-region inference profile ID.
+// The bare foundation-model ID ("anthropic.claude-haiku-4-5") isn't directly
+// invocable on Converse — it returns "the provided model identifier is
+// invalid" — this profile ID is what's actually required.
+const modelID = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
 
 type ChatService struct {
 	client       *bedrockruntime.Client
