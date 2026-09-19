@@ -9,6 +9,7 @@ import (
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
 
@@ -74,6 +75,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("load aws config for uxdesigns: %v", err)
 	}
+	bedrockCfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(bedrockRegion))
+	if err != nil {
+		log.Fatalf("load aws config for bedrock: %v", err)
+	}
 
 	s3Client := s3.NewFromConfig(cfg)
 	photoSvc := photos.NewPhotoService(s3Client, photosBucket, photosCDNDomain)
@@ -85,10 +90,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("load chat system prompt from s3://%s/%s: %v", documentsBucket, chatPromptKey, err)
 	}
-	chatSvc, err := chat.NewChatService(context.Background(), bedrockRegion, string(chatSystemPrompt))
-	if err != nil {
-		log.Fatalf("create chat service: %v", err)
-	}
+	chatSvc := chat.NewChatService(bedrockruntime.NewFromConfig(bedrockCfg), string(chatSystemPrompt))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", healthHandler)

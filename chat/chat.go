@@ -1,38 +1,30 @@
 package chat
 
 import (
-	"context"
 	"encoding/json"
 	"log"
 	"net/http"
 	"strings"
 
-	"github.com/anthropics/anthropic-sdk-go"
-	"github.com/anthropics/anthropic-sdk-go/bedrock"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 )
 
 // maxHistoryMessages caps how many prior turns a client can send, bounding
 // the token cost (and therefore price) of any single request.
 const maxHistoryMessages = 20
 
-// model is Claude Haiku 4.5's Bedrock model ID (Bedrock model IDs carry an
-// "anthropic." prefix that the direct Anthropic API doesn't use).
-const model anthropic.Model = "anthropic.claude-haiku-4-5"
+// modelID is Claude Haiku 4.5's Bedrock model ID.
+const modelID = "anthropic.claude-haiku-4-5"
 
 type ChatService struct {
-	client       *bedrock.MantleClient
+	client       *bedrockruntime.Client
 	systemPrompt string
 }
 
-// NewChatService authenticates via the Lambda's own AWS credentials (the
-// same default credential chain the S3 clients use) rather than a separate
-// Anthropic API key.
-func NewChatService(ctx context.Context, awsRegion, systemPrompt string) (*ChatService, error) {
-	client, err := bedrock.NewMantleClient(ctx, bedrock.MantleClientConfig{AWSRegion: awsRegion})
-	if err != nil {
-		return nil, err
-	}
-	return &ChatService{client: client, systemPrompt: systemPrompt}, nil
+func NewChatService(client *bedrockruntime.Client, systemPrompt string) *ChatService {
+	return &ChatService{client: client, systemPrompt: systemPrompt}
 }
 
 type chatMessage struct {
@@ -65,24 +57,27 @@ func (s *ChatService) Chat(w http.ResponseWriter, r *http.Request) {
 		req.Messages = req.Messages[len(req.Messages)-maxHistoryMessages:]
 	}
 
-	messages := make([]anthropic.MessageParam, 0, len(req.Messages))
+	messages := make([]types.Message, 0, len(req.Messages))
 	for _, m := range req.Messages {
+		content := []types.ContentBlock{&types.ContentBlockMemberText{Value: m.Content}}
 		switch m.Role {
 		case "user":
-			messages = append(messages, anthropic.NewUserMessage(anthropic.NewTextBlock(m.Content)))
+			messages = append(messages, types.Message{Role: types.ConversationRoleUser, Content: content})
 		case "assistant":
-			messages = append(messages, anthropic.NewAssistantMessage(anthropic.NewTextBlock(m.Content)))
+			messages = append(messages, types.Message{Role: types.ConversationRoleAssistant, Content: content})
 		default:
 			http.Error(w, "each message role must be \"user\" or \"assistant\"", http.StatusBadRequest)
 			return
 		}
 	}
 
-	resp, err := s.client.Messages.New(r.Context(), anthropic.MessageNewParams{
-		Model:     model,
-		MaxTokens: 1024,
-		System:    []anthropic.TextBlockParam{{Text: s.systemPrompt}},
-		Messages:  messages,
+	resp, err := s.client.Converse(r.Context(), &bedrockruntime.ConverseInput{
+		ModelId:  aws.String(modelID),
+		Messages: messages,
+		System:   []types.SystemContentBlock{&types.SystemContentBlockMemberText{Value: s.systemPrompt}},
+		InferenceConfig: &types.InferenceConfiguration{
+			MaxTokens: aws.Int32(1024),
+		},
 	})
 	if err != nil {
 		log.Printf("chat completion: %v", err)
@@ -91,9 +86,11 @@ func (s *ChatService) Chat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var reply strings.Builder
-	for _, block := range resp.Content {
-		if text, ok := block.AsAny().(anthropic.TextBlock); ok {
-			reply.WriteString(text.Text)
+	if out, ok := resp.Output.(*types.ConverseOutputMemberMessage); ok {
+		for _, block := range out.Value.Content {
+			if text, ok := block.(*types.ContentBlockMemberText); ok {
+				reply.WriteString(text.Value)
+			}
 		}
 	}
 
