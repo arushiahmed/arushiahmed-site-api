@@ -11,10 +11,12 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/sesv2"
 	"github.com/awslabs/aws-lambda-go-api-proxy/httpadapter"
 
 	"github.com/arushiahmed/arushiahmed-site-api/auth"
 	"github.com/arushiahmed/arushiahmed-site-api/chat"
+	"github.com/arushiahmed/arushiahmed-site-api/contact"
 	"github.com/arushiahmed/arushiahmed-site-api/documents"
 	"github.com/arushiahmed/arushiahmed-site-api/photos"
 	"github.com/arushiahmed/arushiahmed-site-api/store"
@@ -67,6 +69,19 @@ func main() {
 		log.Fatal("CHAT_PROMPT_KEY must be set (S3 key, in the documents bucket, of the chatbot's system prompt text file)")
 	}
 
+	sesRegion := os.Getenv("SES_REGION")
+	if sesRegion == "" {
+		sesRegion = "us-east-1"
+	}
+	contactFromEmail := os.Getenv("CONTACT_FROM_EMAIL")
+	if contactFromEmail == "" {
+		log.Fatal("CONTACT_FROM_EMAIL must be set to a verified SES sender address")
+	}
+	contactToEmail := os.Getenv("CONTACT_TO_EMAIL")
+	if contactToEmail == "" {
+		log.Fatal("CONTACT_TO_EMAIL must be set to the address that should receive contact form messages")
+	}
+
 	cfg, err := config.LoadDefaultConfig(context.Background())
 	if err != nil {
 		log.Fatalf("load aws config: %v", err)
@@ -79,11 +94,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("load aws config for bedrock: %v", err)
 	}
+	sesCfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(sesRegion))
+	if err != nil {
+		log.Fatalf("load aws config for ses: %v", err)
+	}
 
 	s3Client := s3.NewFromConfig(cfg)
 	photoSvc := photos.NewPhotoService(s3Client, photosBucket, photosCDNDomain)
 	documentSvc := documents.NewDocumentService(s3Client, documentsBucket, documentsCDNDomain)
 	uxDesignSvc := uxdesigns.NewUXDesignService(s3.NewFromConfig(uxDesignsCfg), uxDesignsBucket, uxDesignsCDNDomain, uxDesignsPasswordHash, []byte(uxDesignsTokenSecret))
+	contactSvc := contact.NewContactService(sesv2.NewFromConfig(sesCfg), contactFromEmail, contactToEmail)
 
 	chatPromptStore := store.New(s3Client, documentsBucket, "")
 	chatSystemPrompt, err := chatPromptStore.GetObject(context.Background(), chatPromptKey)
@@ -104,6 +124,7 @@ func main() {
 	mux.HandleFunc("GET /uxdesigns/case-studies/{slug}", auth.Require(uxDesignSvc.TokenSecret(), uxDesignSvc.CaseStudy))
 	mux.HandleFunc("GET /uxdesigns/{key...}", auth.Require(uxDesignSvc.TokenSecret(), uxDesignSvc.Get))
 	mux.HandleFunc("POST /chat", chatSvc.Chat)
+	mux.HandleFunc("POST /contact", contactSvc.Send)
 
 	handler := withCORS(mux)
 
