@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -24,80 +25,33 @@ import (
 )
 
 func main() {
-	photosBucket := os.Getenv("PHOTOS_BUCKET")
-	if photosBucket == "" {
-		photosBucket = "arushiahmed-photos"
-	}
-
-	documentsBucket := os.Getenv("DOCUMENTS_BUCKET")
-	if documentsBucket == "" {
-		documentsBucket = "arushiahmed-documents"
-	}
-
-	uxDesignsBucket := os.Getenv("UXDESIGNS_BUCKET")
-	if uxDesignsBucket == "" {
-		uxDesignsBucket = "arushiahmed-uxdesigns"
-	}
+	photosBucket := envOrDefault("PHOTOS_BUCKET", "arushiahmed-photos")
+	documentsBucket := envOrDefault("DOCUMENTS_BUCKET", "arushiahmed-documents")
+	uxDesignsBucket := envOrDefault("UXDESIGNS_BUCKET", "arushiahmed-uxdesigns")
 	// The uxdesigns bucket lives in a different region than the Lambda and
 	// the other buckets; S3 GetObject (unlike ListObjectsV2) hard-fails with
 	// a PermanentRedirect if the client's region doesn't match the bucket's,
 	// so it needs its own correctly-configured client.
-	uxDesignsBucketRegion := os.Getenv("UXDESIGNS_BUCKET_REGION")
-	if uxDesignsBucketRegion == "" {
-		uxDesignsBucketRegion = "us-east-1"
-	}
+	uxDesignsBucketRegion := envOrDefault("UXDESIGNS_BUCKET_REGION", "us-east-1")
 
 	photosCDNDomain := os.Getenv("PHOTOS_CDN_DOMAIN")
 	documentsCDNDomain := os.Getenv("DOCUMENTS_CDN_DOMAIN")
 	uxDesignsCDNDomain := os.Getenv("UXDESIGNS_CDN_DOMAIN")
 
-	uxDesignsPasswordHash := os.Getenv("UXDESIGNS_PASSWORD_HASH")
-	if uxDesignsPasswordHash == "" {
-		log.Fatal("UXDESIGNS_PASSWORD_HASH must be set (generate one with cmd/hashpassword)")
-	}
-	uxDesignsTokenSecret := os.Getenv("UXDESIGNS_TOKEN_SECRET")
-	if uxDesignsTokenSecret == "" {
-		log.Fatal("UXDESIGNS_TOKEN_SECRET must be set to a long random string")
-	}
+	uxDesignsPasswordHash := mustEnv("UXDESIGNS_PASSWORD_HASH", "generate one with cmd/hashpassword")
+	uxDesignsTokenSecret := mustEnv("UXDESIGNS_TOKEN_SECRET", "a long random string")
 
-	bedrockRegion := os.Getenv("BEDROCK_REGION")
-	if bedrockRegion == "" {
-		bedrockRegion = "us-east-2"
-	}
-	chatPromptKey := os.Getenv("CHAT_PROMPT_KEY")
-	if chatPromptKey == "" {
-		log.Fatal("CHAT_PROMPT_KEY must be set (S3 key, in the documents bucket, of the chatbot's system prompt text file)")
-	}
+	bedrockRegion := envOrDefault("BEDROCK_REGION", "us-east-2")
+	chatPromptKey := mustEnv("CHAT_PROMPT_KEY", "S3 key, in the documents bucket, of the chatbot's system prompt text file")
 
-	sesRegion := os.Getenv("SES_REGION")
-	if sesRegion == "" {
-		sesRegion = "us-east-1"
-	}
-	contactFromEmail := os.Getenv("CONTACT_FROM_EMAIL")
-	if contactFromEmail == "" {
-		log.Fatal("CONTACT_FROM_EMAIL must be set to a verified SES sender address")
-	}
-	contactToEmail := os.Getenv("CONTACT_TO_EMAIL")
-	if contactToEmail == "" {
-		log.Fatal("CONTACT_TO_EMAIL must be set to the address that should receive contact form messages")
-	}
+	sesRegion := envOrDefault("SES_REGION", "us-east-1")
+	contactFromEmail := mustEnv("CONTACT_FROM_EMAIL", "a verified SES sender address")
+	contactToEmail := mustEnv("CONTACT_TO_EMAIL", "the address that should receive contact form messages")
 
-	cfg, err := config.LoadDefaultConfig(context.Background())
-	if err != nil {
-		log.Fatalf("load aws config: %v", err)
-	}
-	uxDesignsCfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(uxDesignsBucketRegion))
-	if err != nil {
-		log.Fatalf("load aws config for uxdesigns: %v", err)
-	}
-	bedrockCfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(bedrockRegion))
-	if err != nil {
-		log.Fatalf("load aws config for bedrock: %v", err)
-	}
-	sesCfg, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(sesRegion))
-	if err != nil {
-		log.Fatalf("load aws config for ses: %v", err)
-	}
+	cfg := mustLoadAWSConfig("default")
+	uxDesignsCfg := mustLoadAWSConfig("uxdesigns", config.WithRegion(uxDesignsBucketRegion))
+	bedrockCfg := mustLoadAWSConfig("bedrock", config.WithRegion(bedrockRegion))
+	sesCfg := mustLoadAWSConfig("ses", config.WithRegion(sesRegion))
 
 	s3Client := s3.NewFromConfig(cfg)
 	photoSvc := photos.NewPhotoService(s3Client, photosBucket, photosCDNDomain)
@@ -143,16 +97,41 @@ func main() {
 	}
 }
 
+// envOrDefault returns the named env var, or def if it's unset/empty.
+func envOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+// mustEnv returns the named env var, or exits the process if it's unset.
+// description explains what should go in it, for the resulting log message.
+func mustEnv(key, description string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		log.Fatalf("%s must be set (%s)", key, description)
+	}
+	return v
+}
+
+// mustLoadAWSConfig loads an AWS config, or exits the process on failure.
+// label identifies which config failed, for the resulting log message.
+func mustLoadAWSConfig(label string, optFns ...func(*config.LoadOptions) error) aws.Config {
+	cfg, err := config.LoadDefaultConfig(context.Background(), optFns...)
+	if err != nil {
+		log.Fatalf("load aws config for %s: %v", label, err)
+	}
+	return cfg
+}
+
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func withCORS(next http.Handler) http.Handler {
-	allowedOrigin := os.Getenv("ALLOWED_ORIGIN")
-	if allowedOrigin == "" {
-		allowedOrigin = "http://localhost:3000"
-	}
+	allowedOrigin := envOrDefault("ALLOWED_ORIGIN", "http://localhost:3000")
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST")
