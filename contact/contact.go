@@ -16,6 +16,8 @@ import (
 // potential) from an unauthenticated public endpoint.
 const maxMessageLength = 5000
 
+const maxSubjectLength = 200
+
 type ContactService struct {
 	client      *sesv2.Client
 	fromAddress string
@@ -29,6 +31,7 @@ func NewContactService(client *sesv2.Client, fromAddress, toAddress string) *Con
 type contactRequest struct {
 	Name    string `json:"name"`
 	Email   string `json:"email"`
+	Subject string `json:"subject"`
 	Message string `json:"message"`
 }
 
@@ -44,6 +47,7 @@ func (s *ContactService) Send(w http.ResponseWriter, r *http.Request) {
 
 	req.Name = strings.TrimSpace(req.Name)
 	req.Email = strings.TrimSpace(req.Email)
+	req.Subject = strings.TrimSpace(req.Subject)
 	req.Message = strings.TrimSpace(req.Message)
 
 	if req.Name == "" || req.Message == "" {
@@ -54,12 +58,19 @@ func (s *ContactService) Send(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "message is too long", http.StatusBadRequest)
 		return
 	}
+	if len(req.Subject) > maxSubjectLength {
+		http.Error(w, "subject is too long", http.StatusBadRequest)
+		return
+	}
 	if _, err := mail.ParseAddress(req.Email); err != nil {
 		http.Error(w, "a valid email address is required", http.StatusBadRequest)
 		return
 	}
 
 	subject := "New message from " + req.Name + " via arushiahmed.com"
+	if req.Subject != "" {
+		subject = req.Subject + " — via arushiahmed.com contact form"
+	}
 	body := "From: " + req.Name + " <" + req.Email + ">\n\n" + req.Message
 
 	_, err := s.client.SendEmail(r.Context(), &sesv2.SendEmailInput{
