@@ -47,6 +47,7 @@ func main() {
 	sesRegion := envOrDefault("SES_REGION", "us-east-1")
 	contactFromEmail := mustEnv("CONTACT_FROM_EMAIL", "a verified SES sender address")
 	contactToEmail := mustEnv("CONTACT_TO_EMAIL", "the address that should receive contact form messages")
+	turnstileSecretKey := mustEnv("TURNSTILE_SECRET_KEY", "the Cloudflare Turnstile secret key")
 
 	cfg := mustLoadAWSConfig("default")
 	uxDesignsCfg := mustLoadAWSConfig("uxdesigns", config.WithRegion(uxDesignsBucketRegion))
@@ -57,7 +58,7 @@ func main() {
 	photoSvc := photos.NewPhotoService(s3Client, photosBucket, photosCDNDomain)
 	documentSvc := documents.NewDocumentService(s3Client, documentsBucket, documentsCDNDomain)
 	uxDesignSvc := uxdesigns.NewUXDesignService(s3.NewFromConfig(uxDesignsCfg), uxDesignsBucket, uxDesignsCDNDomain, uxDesignsPasswordHash, []byte(uxDesignsTokenSecret))
-	contactSvc := contact.NewContactService(sesv2.NewFromConfig(sesCfg), contactFromEmail, contactToEmail)
+	contactSvc := contact.NewContactService(sesv2.NewFromConfig(sesCfg), contactFromEmail, contactToEmail, turnstileSecretKey)
 
 	chatPromptStore := store.New(s3Client, documentsBucket, "")
 	chatSystemPrompt, err := chatPromptStore.GetObject(context.Background(), chatPromptKey)
