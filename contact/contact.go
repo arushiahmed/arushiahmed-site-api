@@ -79,6 +79,13 @@ func (s *ContactService) verifyTurnstile(token, remoteIP string) (bool, error) {
 	return result.Success, nil
 }
 
+// sanitizeHeaderValue strips CR/LF from a user-controlled string before it's
+// used inside an email header value (From, Subject), preventing header
+// injection via embedded newlines.
+func sanitizeHeaderValue(s string) string {
+	return strings.NewReplacer("\r", "", "\n", "").Replace(s)
+}
+
 // clientIP returns the best-effort originating client IP for a request that
 // may have arrived through CloudFront/Lambda Function URL proxying.
 func clientIP(r *http.Request) string {
@@ -139,14 +146,26 @@ func (s *ContactService) Send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	subject := "New message from " + req.Name + " via arushiahmed.com"
-	if req.Subject != "" {
-		subject = req.Subject + " — via arushiahmed.com contact form"
+	safeName := sanitizeHeaderValue(req.Name)
+	safeSubject := sanitizeHeaderValue(req.Subject)
+
+	subject := "New message from " + safeName + " via arushiahmed.com"
+	if safeSubject != "" {
+		subject = safeSubject + " — via arushiahmed.com contact form"
 	}
 	body := "From: " + req.Name + " <" + req.Email + ">\n\n" + req.Message
 
+	// The envelope From must stay on our own verified/authenticated domain —
+	// setting it to the visitor's address is what caused deliverability
+	// failures before (SPF/DKIM/DMARC can't authenticate mail claiming to be
+	// from a domain we don't control). Instead, put the visitor's name and
+	// email in the display-name portion, which most inboxes show right in
+	// the message list without needing to open the email.
+	fromDisplay := safeName + " (" + req.Email + ") via arushiahmed.com"
+	fromHeader := fromDisplay + " <" + s.fromAddress + ">"
+
 	_, err = s.client.SendEmail(r.Context(), &sesv2.SendEmailInput{
-		FromEmailAddress: aws.String(s.fromAddress),
+		FromEmailAddress: aws.String(fromHeader),
 		Destination:      &types.Destination{ToAddresses: []string{s.toAddress}},
 		ReplyToAddresses: []string{req.Email},
 		Content: &types.EmailContent{
