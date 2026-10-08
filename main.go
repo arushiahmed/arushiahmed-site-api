@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/aws/aws-lambda-go/lambda"
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -131,10 +132,21 @@ func healthHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+// withCORS allows a comma-separated list of origins (ALLOWED_ORIGIN), rather
+// than a single hardcoded one — the production frontend is reachable at both
+// arushiahmed.com and www.arushiahmed.com (same CloudFront distribution,
+// different hostnames), so both need to be recognized as valid origins.
 func withCORS(next http.Handler) http.Handler {
-	allowedOrigin := envOrDefault("ALLOWED_ORIGIN", "http://localhost:3000")
+	raw := strings.Split(envOrDefault("ALLOWED_ORIGIN", "http://localhost:3000"), ",")
+	allowedOrigins := make(map[string]bool, len(raw))
+	for _, origin := range raw {
+		allowedOrigins[strings.TrimSpace(origin)] = true
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", allowedOrigin)
+		if origin := r.Header.Get("Origin"); allowedOrigins[origin] {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Vary", "Origin")
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
